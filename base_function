@@ -1,0 +1,111 @@
+#: coding:utf8
+from __future__ import division
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import (RandomForestClassifier, ExtraTreesClassifier, GradientBoostingClassifier)
+from sklearn import (metrics, cross_validation, linear_model, preprocessing)
+from pandas import Series, DataFrame, read_table
+
+SEED = 42  # always use a seed for randomized procedures
+
+predata = read_table(r"E:\DataAnalysis\model\german.data.txt",sep=' ',header=None)
+predata.columns = ['seca','dua','creditHist','purpose','creditamt','accbou','presidentyear','insrate','peson','degu',\
+                 'preres','property','age','insplan','housing','nunofcredit','job','mainte','tel','foreign','y']
+
+predata.tel = predata.tel.replace('A191',0).replace('A192',1)
+predata.foreign = predata.foreign.replace('A201',1).replace('A202',0)
+predata.y = predata.y.replace(1,0).replace(2,1)
+
+dumlist = ['seca','creditHist','purpose','accbou','presidentyear','peson','degu','property',\
+           'insplan','housing','job','mainte']
+for ikey in dumlist:
+    dummies = pd.get_dummies(predata[ikey], prefix=ikey)
+    predata = predata.ix[:,predata.columns!=ikey].join(dummies)
+
+X = predata.ix[:,predata.columns!='y']
+y = predata.ix[:,'y']
+
+# modelRF =RandomForestClassifier(n_estimators=500, max_features='sqrt', max_depth=None, min_samples_split=9, compute_importances=True, random_state=SEED)#8803
+# modelXT =ExtraTreesClassifier(n_estimators=500, max_features='sqrt', max_depth=None, min_samples_split=8, compute_importances=True, random_state=SEED) #8903
+modelRF =RandomForestClassifier(n_estimators=500, max_features='sqrt', max_depth=None, min_samples_split=9, random_state=SEED)#8803
+modelXT =ExtraTreesClassifier(n_estimators=500, max_features='sqrt', max_depth=None, min_samples_split=8, random_state=SEED) #8903
+modelGB =GradientBoostingClassifier(n_estimators=50, learning_rate=0.20, max_depth=20, min_samples_split=9, random_state=SEED)  #8749
+
+# === Combine Models === #
+# Do a linear combination using a cross_validated data split
+X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X, y, test_size=0.5, random_state=SEED)
+
+modelRF.fit(X_cv, y_cv) 
+modelXT.fit(X_cv, y_cv) 
+modelGB.fit(X_cv, y_cv) 
+predsRF = modelRF.predict_proba(X_train)[:, 1]
+predsXT = modelXT.predict_proba(X_train)[:, 1]
+predsGB = modelGB.predict_proba(X_train)[:, 1]
+preds = np.hstack((predsRF, predsXT, predsGB)).reshape(3,len(predsGB)).transpose()
+preds[preds>0.9999999]=0.9999999
+preds[preds<0.0000001]=0.0000001
+preds = -np.log((1-preds)/preds)
+modelEN1 = linear_model.LogisticRegression()
+modelEN1.fit(preds, y_train)
+print modelEN1.coef_
+
+# modelRF.fit(X_train, y_train) 
+# modelXT.fit(X_train, y_train) 
+# modelGB.fit(X_train, y_train) 
+# predsRF = modelRF.predict_proba(X_cv)[:, 1]
+# predsXT = modelXT.predict_proba(X_cv)[:, 1]
+# predsGB = modelGB.predict_proba(X_cv)[:, 1]
+# preds = np.hstack((predsRF, predsXT, predsGB)).reshape(3,len(predsGB)).transpose()
+# preds[preds>0.9999999]=0.9999999
+# preds[preds<0.0000001]=0.0000001
+# preds = -np.log((1-preds)/preds)
+# modelEN2 = linear_model.LogisticRegression()
+# modelEN2.fit(preds, y_cv)
+# print modelEN2.coef_
+
+# coefRF = modelEN1.coef_[0][0] + modelEN2.coef_[0][0]
+# coefXT = modelEN1.coef_[0][1] + modelEN2.coef_[0][1]
+# coefGB = modelEN1.coef_[0][2] + modelEN2.coef_[0][2]
+
+coefRF = modelEN1.coef_[0][0] 
+coefXT = modelEN1.coef_[0][1]
+coefGB = modelEN1.coef_[0][2] 
+
+# === Predictions === #
+# When making predictions, retrain the model on the whole training set
+modelRF.fit(X, y)
+modelXT.fit(X, y)
+modelGB.fit(X, y)
+
+### Combine here
+# predsRF = modelRF.predict_proba(X)[:, 1]
+# predsXT = modelXT.predict_proba(X)[:, 1]
+# predsGB = modelGB.predict_proba(X)[:, 1]
+predsRF = modelRF.predict_proba(X_cv)[:, 1]
+predsXT = modelXT.predict_proba(X_cv)[:, 1]
+predsGB = modelGB.predict_proba(X_cv)[:, 1]
+predsRF[predsRF>0.9999999]=0.9999999
+predsXT[predsXT>0.9999999]=0.9999999
+predsGB[predsGB>0.9999999]=0.9999999
+predsRF[predsRF<0.0000001]=0.0000001
+predsXT[predsXT<0.0000001]=0.0000001
+predsGB[predsGB<0.0000001]=0.0000001
+predsRF = -np.log((1-predsRF)/predsRF)
+predsXT = -np.log((1-predsXT)/predsXT)
+predsGB = -np.log((1-predsGB)/predsGB)
+preds = coefRF * predsRF + coefXT * predsXT + coefGB * predsGB
+
+# filename = raw_input("Enter name for submission file: ")
+# save_results(preds, "submissions/en" + filename + ".csv")
+
+def predict_accu(x,y):
+	tot = len(x)
+	x = Series(x)
+	x[x<0.5] = 0
+	x[x>=0.5] = 1
+	y = Series(y)
+	accu = (x==y).sum()
+	return accu/tot
+
+print (predict_accu(predsRF,y_cv),predict_accu(predsXT,y_cv),predict_accu(predsGB,y_cv),predict_accu(preds,y_cv))
